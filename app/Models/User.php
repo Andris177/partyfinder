@@ -58,4 +58,9 @@ class User extends Authenticatable
     {
         return $this->hasMany(EventReaction::class);
     }
+
+    public function getIsAdminAttribute()
+{
+    return $this->role === 'admin';
+}
 }

@@ -26,6 +26,19 @@ class ProfileController extends Controller
      */
     public function update(ProfileUpdateRequest $request): RedirectResponse
     {
+        if ($request->hasFile('avatar')) {
+            // Töröljük a régit, ha volt (opcionális, de ajánlott)
+            if ($request->user()->avatar) {
+                \Illuminate\Support\Facades\Storage::disk('public')->delete(str_replace('/storage/', '', $request->user()->avatar));
+            }
+
+            $path = $request->file('avatar')->store('avatars', 'public');
+            $request->user()->avatar = '/storage/' . $path;
+            
+            // Mentjük azonnal az avatar változást
+            $request->user()->save();
+        }
+        
         $request->user()->fill($request->validated());
 
         if ($request->user()->isDirty('email')) {

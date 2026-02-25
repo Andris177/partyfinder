@@ -3,192 +3,204 @@
 namespace App\Http\Controllers;
 
 use App\Models\Event;
+use App\Models\Location;
+use App\Models\EventReaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use App\Services\FacebookEventService;
-use App\Http\Resources\EventResource;
 
 class EventController extends Controller
 {
-    public function index()
-    {
-        $events = Event::with('location.city.country')->get();
+    // --- FELHASZNÁLÓI OLDALAK ---
 
-        return response()->json(
-        $events->map(function ($event) {
-            return [
-                    'id' => $event->id,
-                    'title' => $event->title,
-                    'description' => $event->description,
-                    'interested' => $event->interested_total,
-                    'attending'  => $event->attending_total,
-                    'location'   => $event->location,
-                ];
-            })
-        );
+    // 1. FŐOLDAL
+    public function index() {
+        return view('welcome');
     }
 
-    public function store(Request $request)
-    {
-        $validated = $request->validate([
-            'title' => 'required|string|min:3|max:150',
-            'description' => 'nullable|string',
-            'location_id' => 'required|exists:locations,id',
-            'start_time' => 'required|date|after:now',
-            'end_time' => 'nullable|date|after:start_time',
-            'image_url' => 'nullable|url',
-            'ticket_url' => 'nullable|url',
-            'facebook_event_id' => 'nullable|string|max:100',
-        ]);
-
-        $event = Event::create([
-            ...$validated,
-            'created_by' => Auth::id()
-        ]);
-
-        return response()->json([
-            'message' => 'Esemény létrehozva',
-            'data' => $event
-        ], 201);
-    }
-
+    // 2. RÉSZLETEK OLDAL (Show) - ✅ JAVÍTVA
     public function show($id)
     {
-        $event = Event::with('location.city.country')->findOrFail($id);
+        // Betöltjük az eseményt a várossal és a kommentekkel
+        $event = Event::with(['location.city', 'comments.user'])->findOrFail($id);
 
-        return response()->json([
-            'id' => $event->id,
-            'title' => $event->title,
-            'description' => $event->description,
-            'interested' => $event->interested_total,
-            'attending'  => $event->attending_total,
-            'location'   => $event->location,
-        ]);
+        // Átadjuk a nézetnek az $event változót!
+        return view('events.show', compact('event'));
     }
 
-
-    public function destroy($id)
-    {
-        $event = Event::find($id);
-        if (!$event) return response()->json(['message' => 'Esemény nem található'], 404);
-
-        if ($event->created_by !== Auth::id() && Auth::user()->role !== 'admin') {
-            return response()->json(['message' => 'Nincs jogosultságod törölni'], 403);
-        }
-
-        $event->delete();
-        return response()->json(['message' => 'Esemény törölve']);
-    }
-
+    // 3. SAJÁT ESEMÉNYEK (My Events) - ✅ JAVÍTVA
     public function myEvents()
     {
-        $userId = auth()->id();
+        if (!Auth::check()) return redirect()->route('login');
 
-        if (!$userId) {
-            return response()->json(['message' => 'Nincs bejelentkezett felhasználó'], 401);
+        $user = Auth::user();
+
+        // Lekérjük azokat, amikre a user reagált
+        $reactedEventIds = EventReaction::where('user_id', $user->id)->pluck('event_id');
+        
+        $events = Event::whereIn('id', $reactedEventIds)
+                       ->with('location')
+                       ->orderBy('start_time', 'asc')
+                       ->get();
+
+        // FONTOS: Ellenőrizd, hogy a fájl a resources/views/events/ mappában van-e!
+        return view('events.my_events', compact('events')); 
+    }
+
+    // --- API VÉGPONTOK (JS-hez) ---
+
+    // 4. SZŰRŐ API
+    public function filter(Request $request)
+    {
+        $query = Event::with(['location.city']);
+
+        if ($request->filled('keyword')) {
+            $query->where('title', 'like', '%' . $request->keyword . '%');
+        }
+        if ($request->filled('city_id')) {
+            $query->whereHas('location', function($q) use ($request) {
+                $q->where('city_id', $request->city_id);
+            });
+        }
+        if ($request->filled('location_id')) {
+            $query->where('location_id', $request->location_id);
+        }
+        if ($request->filled('genre') && $request->genre !== 'all') {
+            $query->where('genre', $request->genre);
+        }
+        if ($request->filled('age_limit') && $request->age_limit !== 'all') {
+             $query->where(function($q) use ($request) {
+                 $q->where('age_limit', '>=', $request->age_limit)->orWhere('age_limit', 0);
+             });
         }
 
-        $events = Event::with('location')
-            ->where('created_by', $userId)
-            ->orderBy('start_time', 'desc')
-            ->get();
-
+        $events = $query->orderBy('start_time', 'asc')->get();
         return response()->json($events);
     }
 
-    public function filter(Request $request)
-    {  
-        $query = Event::with('location.city.country');
+    // 5. VISSZAJELZÉS (React)
+    // ... (a többi függvény után)
 
-        if ($request->has('date')) {
-            $query->whereDate('start_time', $request->date);
-        }
+    // ... korábbi kódok ...
 
-        if ($request->has('city_id')) {
-            $query->whereHas('location.city', function ($q) use ($request) {
-                $q->where('id', $request->city_id);
-            });
-        }
-
-        if ($request->has('location_id')) {
-            $query->where('location_id', $request->location_id);
-        }     
-
-        if ($request->has('country_id')) {
-            $query->whereHas('location.city.country', function ($q) use ($request) {
-                $q->where('id', $request->country_id);
-            });
-        }
-
-        return response()->json($query->get());
-    }
-
-    public function addInterested($id)
+    // ✅ REAKCIÓ GOMBOK MŰKÖDÉSE
+    public function react(Request $request, $id)
     {
         $event = Event::findOrFail($id);
-        $event->increment('interested_count');
+        $user = auth()->user();
+        $type = $request->input('type', 'interested'); // Alapból 'interested'
 
-        return response()->json([
-            'interested' => $event->interested_total
-        ]);
-    }
+        // Megnézzük, van-e már ilyen reakciója a felhasználónak
+        // (Feltételezem, hogy van egy 'reactions' kapcsolata vagy táblája)
+        $existingReaction = $event->reactions()
+            ->where('user_id', $user->id)
+            ->where('type', $type)
+            ->first();
 
+        if ($existingReaction) {
+            // --- HA MÁR BEJELÖLTE (Kivétel) ---
+        
+            // 1. Töröljük a reakciót
+            $existingReaction->delete();
+        
+            // 2. CSÖKKENTJÜK a számot 1-gyel (a meglévő számból vonunk le)
+            // Csak akkor vonunk le, ha nagyobb mint 0, nehogy negatív legyen
+            if ($event->interested_count > 0) {
+                $event->decrement('interested_count');
+            }
 
-    public function addAttending($id)
-    {
-        $event = Event::findOrFail($id);
-        $event->increment('attending_count');
+        } else {
+            // --- HA MÉG NEM JELÖLTE BE (Hozzáadás) ---
 
-        return response()->json([
-            'attending' => $event->attending_total
-        ]);
-    }
+            // 1. Létrehozzuk a reakciót
+            $event->reactions()->create([
+                'user_id' => $user->id,
+                'type' => $type
+            ]);
 
-
-    public function uploadImage(Request $request, $id)
-    {
-        $event = Event::find($id);
-        if (!$event) {
-          return response()->json(['message' => 'Event nem található'], 404);
+            // 2. NÖVELJÜK a számot 1-gyel (a meglévő számhoz adunk)
+            $event->increment('interested_count');
         }
 
+        return back();
+    }
+
+    // ✅ KOMMENT MENTÉSE (Mert a route-od ide mutat: storeComment)
+    public function storeComment(Request $request, $id)
+    {
+        $request->validate(['content' => 'required|max:500']);
+
+        \App\Models\Comment::create([
+            'user_id' => \Illuminate\Support\Facades\Auth::id(),
+            'event_id' => $id,
+            'content' => $request->content,
+        ]);
+
+        return back()->with('success', 'Komment elküldve!');
+    }
+
+    // --- ADMIN / SZERKESZTŐ FUNKCIÓK ---
+
+    // 6. ÚJ ESEMÉNY (Create)
+    public function create() {
+        $locations = \App\Models\Location::with('city')->get();
+        return view('events.create', compact('locations'));
+    }
+
+    // 7. MENTÉS (Store) - 🔴 ITT VOLT A HIBA, JAVÍTVA!
+    public function store(Request $request) {
         $request->validate([
-            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:2048'
+            'title' => 'required|string|max:255',
+            'location_id' => 'required|exists:locations,id',
+            'start_time' => 'required|date',
+            'image' => 'nullable|image|max:4096', // Validálás
         ]);
 
-        $path = $request->file('image')->store('event-images', 'public');
+        // KIVESSZÜK az 'image' mezőt, hogy ne kerüljön az adatbázisba nyersen
+        $data = $request->except(['image', '_token']);
 
-        $event->update([
-          'image_url' => asset('storage/' . $path)
-        ]);
-
-        return response()->json([
-            'message' => 'Kép feltöltve',
-            'image_url' => $event->image_url
-        ]);
-    }
-
-    public function refreshFacebookStats($id, FacebookEventService $fbService)
-    {
-        $event = Event::findOrFail($id);
-
-        if (!$event->facebook_event_id) {
-            return response()->json(['error' => 'Ehhez az eseményhez nincs Facebook ID'], 400);
+        // Fájl feltöltés kezelése
+        if ($request->hasFile('image')) {
+            $path = $request->file('image')->store('events', 'public');
+            $data['image_url'] = '/storage/' . $path;
         }
 
-        $stats = $fbService->getEventStats($event->facebook_event_id);
+        $data['created_by'] = Auth::id();
+        
+        // Alapértelmezett értékek, ha üresek
+        $data['genre'] = $request->genre ?? 'Egyéb';
+        $data['age_limit'] = $request->age_limit ?? 0;
 
-        $event->update([
-            'facebook_interested_count' => $stats['interested'],
-            'facebook_attending_count'  => $stats['attending'],
-        ]);
+        Event::create($data);
 
-        return response()->json([
-            'message'      => 'Facebook adatok frissítve',
-            'fb_interested' => $event->facebook_interested_count,
-            'fb_attending'  => $event->facebook_attending_count,
-            'total_interested' => $event->interested_total,
-            'total_attending'  => $event->attending_total,
-        ]);
+        return redirect()->route('events.feed')->with('status', 'Esemény létrehozva!');
+    }
+
+    // 8. SZERKESZTÉS (Edit)
+    public function edit(Event $event) {
+        if ($event->created_by !== Auth::id() && !Auth::user()->is_admin) abort(403);
+        $cities = \App\Models\City::with('locations')->get();
+        return view('events.edit', compact('event', 'cities'));
+    }
+
+    // 9. FRISSÍTÉS (Update)
+    public function update(Request $request, Event $event) {
+        if ($event->created_by !== Auth::id() && !Auth::user()->is_admin) abort(403);
+        
+        $data = $request->except(['image', '_token', '_method']);
+        
+        if ($request->hasFile('image')) {
+            $path = $request->file('image')->store('events', 'public');
+            $data['image_url'] = '/storage/' . $path;
+        }
+        
+        $event->update($data);
+        return redirect()->route('events.show', ['id' => $event->id])->with('status', 'Frissítve!');
+    }
+
+    // 10. TÖRLÉS (Destroy)
+    public function destroy(Event $event) {
+        if ($event->created_by !== Auth::id() && !Auth::user()->is_admin) abort(403);
+        $event->delete();
+        return redirect()->route('events.feed')->with('status', 'Törölve!');
     }
 }
