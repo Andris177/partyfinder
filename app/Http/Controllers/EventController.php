@@ -51,29 +51,54 @@ class EventController extends Controller
     // 4. SZŰRŐ API
     public function filter(Request $request)
     {
-        $query = Event::with(['location.city']);
+        // Betöltjük a kapcsolatokat, hogy később országra és városra is lehessen szűrni
+        $query = \App\Models\Event::with(['location.city.country']);
 
+        // Keresőmező
         if ($request->filled('keyword')) {
             $query->where('title', 'like', '%' . $request->keyword . '%');
         }
+        
+        // Ország szűrő
+        if ($request->filled('country_id')) {
+            $query->whereHas('location.city', function($q) use ($request) {
+                $q->where('country_id', $request->country_id);
+            });
+        }
+
+        // Város szűrő
         if ($request->filled('city_id')) {
             $query->whereHas('location', function($q) use ($request) {
                 $q->where('city_id', $request->city_id);
             });
         }
+
+        // Klub / Helyszín szűrő
         if ($request->filled('location_id')) {
             $query->where('location_id', $request->location_id);
         }
+
+        // 🔴 ITT A VARÁZSLAT: Csak akkor szűrünk a stílusra, ha a szó NEM az, hogy "all"
         if ($request->filled('genre') && $request->genre !== 'all') {
             $query->where('genre', $request->genre);
         }
+
+        // 🔴 ITT IS: Csak akkor szűrünk korhatárra, ha a szó NEM az, hogy "all"
         if ($request->filled('age_limit') && $request->age_limit !== 'all') {
-             $query->where(function($q) use ($request) {
-                 $q->where('age_limit', '>=', $request->age_limit)->orWhere('age_limit', 0);
-             });
+             $query->where('age_limit', '>=', (int)$request->age_limit);
+        }
+        
+        // Dátum (Nap) szűrő
+        if ($request->filled('date')) {
+            $query->whereDate('start_time', $request->date);
         }
 
+        // Alapból csak a jövőbeli vagy mai bulikat mutassa, a régieket ne!
+        $query->whereDate('start_time', '>=', now()->toDateString());
+
+        // Időrendbe tesszük
         $events = $query->orderBy('start_time', 'asc')->get();
+        
         return response()->json($events);
     }
 

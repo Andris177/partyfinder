@@ -59,9 +59,11 @@
                         </a>
                         @endif
 
+                        @if($event->facebook_url && str_contains($event->facebook_url, 'facebook.com'))
                         <a href="{{ $event->facebook_url }}" target="_blank" class="block w-full text-center bg-[#1877F2] hover:bg-[#166fe5] text-white font-bold py-3 rounded-xl shadow-lg transition">
                             <i class="fab fa-facebook mr-2"></i> Facebook Esemény
                         </a>
+                        @endif
 
                         <div class="bg-gray-800 rounded-xl p-5 border border-gray-700 shadow-lg">
                             <h3 class="text-gray-400 text-xs font-bold uppercase tracking-wider mb-4 text-center">Visszajelzés</h3>
@@ -131,9 +133,11 @@
                         </a>
                         @endif
 
-                        <a href="{{ $event->facebook_url }}" target="_blank" class="block w-full text-center bg-[#1877F2] hover:bg-[#166fe5] text-white font-bold py-3 rounded-xl shadow-lg transition">
-                            <i class="fab fa-facebook mr-2"></i> Facebook Esemény
-                        </a>
+                        @if($event->facebook_url)
+                            <a href="{{ $event->facebook_url }}" target="_blank" class="block w-full text-center bg-[#1877F2] hover:bg-[#166fe5] text-white font-bold py-3 rounded-xl shadow-lg transition mt-3">
+                                <i class="fab fa-facebook mr-2"></i> Facebook Event
+                            </a>
+                        @endif
 
                         <div class="bg-gray-800 rounded-xl p-5 border border-gray-700 shadow-lg">
                             <h3 class="text-gray-400 text-xs font-bold uppercase tracking-wider mb-4 text-center">Visszajelzés</h3>

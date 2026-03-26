@@ -9,7 +9,7 @@ class FacebookPage extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'url', 'city_id', 'is_active', 'last_scraped_at'];
+    protected $fillable = ['name', 'url', 'city_id', 'is_active', 'last_scraped_at', 'events_url', 'scraper_driver'];
 
     public function city()
     {
